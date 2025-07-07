@@ -20,8 +20,15 @@ import urllib
 import urllib.error
 import urllib.request
 from pathlib import Path
+import warnings
 
-import torch
+try:
+    import torch
+    BUILD_CUDA_EXT = None
+except ImportError:
+    BUILD_CUDA_EXT = "0"
+    warnings.warn("Pytorch is not installed. Extentions will not be compiled. Please install Pytorch first: `pip install torch`")
+
 from setuptools import find_packages, setup
 
 try:
@@ -39,7 +46,12 @@ TORCH_CUDA_ARCH_LIST = os.environ.get("TORCH_CUDA_ARCH_LIST")
 ROCM_VERSION = os.environ.get('ROCM_VERSION', None)
 SKIP_ROCM_VERSION_CHECK = os.environ.get('SKIP_ROCM_VERSION_CHECK', None)
 
-if ROCM_VERSION is None and torch.version.hip:
+if BUILD_CUDA_EXT is None:
+    BUILD_CUDA_EXT = os.environ.get("BUILD_CUDA_EXT")
+    if BUILD_CUDA_EXT is None:
+        BUILD_CUDA_EXT = "1" if sys.platform != "darwin" else "0"
+
+if BUILD_CUDA_EXT == "1" and ROCM_VERSION is None and torch.version.hip:
     ROCM_VERSION = ".".join(torch.version.hip.split(".")[:2]) # print(torch.version.hip) -> 6.3.42131-fa1d09cbd
     os.environ["ROCM_VERSION"] = ROCM_VERSION
 
@@ -61,10 +73,6 @@ gptqmodel_version = version_vars['version']
 BASE_WHEEL_URL = (
     "https://github.com/ModelCloud/GPTQModel/releases/download/{tag_name}/{wheel_name}"
 )
-
-BUILD_CUDA_EXT = os.environ.get("BUILD_CUDA_EXT")
-if BUILD_CUDA_EXT is None:
-    BUILD_CUDA_EXT = "1" if sys.platform != "darwin" else "0"
 
 if os.environ.get("GPTQMODEL_FORCE_BUILD", None):
     FORCE_BUILD = True
@@ -131,25 +139,26 @@ if not os.getenv("CI"):
         requirements = [line.strip() for line in f if line.strip()]
 
 
-if TORCH_CUDA_ARCH_LIST is None:
-    HAS_CUDA_V8 = any(torch.cuda.get_device_capability(i)[0] >= 8 for i in range(torch.cuda.device_count()))
+if BUILD_CUDA_EXT == "1":
+    if TORCH_CUDA_ARCH_LIST is None:
+        HAS_CUDA_V8 = any(torch.cuda.get_device_capability(i)[0] >= 8 for i in range(torch.cuda.device_count()))
 
-    got_cuda_v6 = any(torch.cuda.get_device_capability(i)[0] >= 6 for i in range(torch.cuda.device_count()))
-    got_cuda_between_v6_and_v8 = any(6 <= torch.cuda.get_device_capability(i)[0] < 8 for i in range(torch.cuda.device_count()))
+        got_cuda_v6 = any(torch.cuda.get_device_capability(i)[0] >= 6 for i in range(torch.cuda.device_count()))
+        got_cuda_between_v6_and_v8 = any(6 <= torch.cuda.get_device_capability(i)[0] < 8 for i in range(torch.cuda.device_count()))
 
-    # not validated for compute < 6
-    if not got_cuda_v6 and not torch.version.hip:
-        BUILD_CUDA_EXT = "0"
+        # not validated for compute < 6
+        if not got_cuda_v6 and not torch.version.hip:
+            BUILD_CUDA_EXT = "0"
 
-        if sys.platform == "win32" and 'cu+' not in torch.__version__:
-            print("No CUDA device detected: avoid installing torch from PyPi which may not have bundle CUDA support for Windows.\nInstall via PyTorch: `https://pytorch.org/get-started/locally/`")
+            if sys.platform == "win32" and 'cu+' not in torch.__version__:
+                print("No CUDA device detected: avoid installing torch from PyPi which may not have bundle CUDA support for Windows.\nInstall via PyTorch: `https://pytorch.org/get-started/locally/`")
 
-    # if cuda compute is < 8.0, always force build since we only compile cached wheels for >= 8.0
-    if BUILD_CUDA_EXT == "1" and not FORCE_BUILD:
-        if got_cuda_between_v6_and_v8:
-            FORCE_BUILD = True
-else:
-    HAS_CUDA_V8 = not ROCM_VERSION and len([arch for arch in TORCH_CUDA_ARCH_LIST.split() if float(arch.split('+')[0]) >= 8]) > 0
+        # if cuda compute is < 8.0, always force build since we only compile cached wheels for >= 8.0
+        if BUILD_CUDA_EXT == "1" and not FORCE_BUILD:
+            if got_cuda_between_v6_and_v8:
+                FORCE_BUILD = True
+    else:
+        HAS_CUDA_V8 = not ROCM_VERSION and len([arch for arch in TORCH_CUDA_ARCH_LIST.split() if float(arch.split('+')[0]) >= 8]) > 0
 
 if RELEASE_MODE == "1":
     common_setup_kwargs["version"] += f"+{get_version_tag()}"
@@ -314,7 +323,7 @@ if BUILD_CUDA_EXT == "1":
 
 class CachedWheelsCommand(_bdist_wheel):
     def run(self):
-        if FORCE_BUILD or torch.xpu.is_available():
+        if BUILD_CUDA_EXT == "1" and (FORCE_BUILD or torch.xpu.is_available()):
             return super().run()
 
         python_version = f"cp{sys.version_info.major}{sys.version_info.minor}"
