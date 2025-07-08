@@ -134,9 +134,8 @@ def get_version_tag() -> str:
     return f"cu{CUDA_VERSION[:3]}torch{'.'.join(torch.version.__version__.split('.')[:2])}"
 
 requirements = []
-if not os.getenv("CI"):
-    with open('requirements.txt') as f:
-        requirements = [line.strip() for line in f if line.strip()]
+with open('requirements.txt') as f:
+    requirements = [line.strip() for line in f if line.strip()]
 
 
 if BUILD_CUDA_EXT == "1":
